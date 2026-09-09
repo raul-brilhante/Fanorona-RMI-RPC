@@ -36,7 +36,7 @@ class FanoronaServer:
         self.game = Game()
         self.lock = threading.Lock()
         self.choice_counter = 0
-        self.pending_choices = {}  # id -> context
+        self.pending_choices = {}
         self.turn_pending = False
 
     def start(self):
@@ -44,7 +44,6 @@ class FanoronaServer:
         self.sock.listen(5)
         print(f"Server listening on {self.host}:{self.port}")
         threading.Thread(target=self.accept_loop, daemon=True).start()
-        # wait until two players join
         while True:
             if len(self.clients) >= 2:
                 self.run_game()
@@ -90,23 +89,19 @@ class FanoronaServer:
         return None
 
     def run_game(self):
-        # assign colors to first two players
         p1, p2 = self.clients[0], self.clients[1]
-        # assign Red (R) to first player and Pink (P) to second player
         p1.color = 'R'
         p2.color = 'P'
         p1.send({'type': 'assign', 'color': 'R'})
         p2.send({'type': 'assign', 'color': 'P'})
         self.broadcast({'type': 'start'})
         self.send_board()
-        # initial active turn (player may move immediately)
         self.broadcast({'type': 'turn', 'color': self.game.turn, 'status': 'active'})
 
         visited_seq = set()
         while True:
             player, line = self.q.get()
             try:
-                # expect JSON per line
                 try:
                     msg = json.loads(line)
                 except Exception:
@@ -153,10 +148,8 @@ class FanoronaServer:
                         continue
 
                     if requires_choice:
-                        # create pending choice context
                         self.choice_counter += 1
                         cid = str(self.choice_counter)
-                        # store context needed to apply choice later
                         approach, withdrawal = self.game.captures_for_move(x1, y1, x2, y2)
                         self.pending_choices[cid] = {
                             'player': player,
@@ -169,7 +162,6 @@ class FanoronaServer:
                         player.send({'type': 'choose', 'choice_id': cid, 'options': ['approach', 'withdrawal'], 'approach_count': len(approach), 'withdrawal_count': len(withdrawal)})
                         continue
 
-                    # broadcast move ok
                     self.game.record_move(captured)
                     self.broadcast({'type': 'move_ok', 'color': player.color, 'from': [x1, y1], 'to': [x2, y2], 'captured': captured})
                     self.send_board()
@@ -179,12 +171,10 @@ class FanoronaServer:
                     if cont:
                         visited_seq.add((x2, y2))
                         player.send({'type': 'continue', 'msg': 'Você pode capturar novamente'})
-                        # still the same player's turn for continued capture
                         self.broadcast({'type': 'turn', 'color': self.game.turn, 'status': 'capture'})
                         continue
                     else:
                         visited_seq.clear()
-                        # player must press End Turn to hand control to opponent
                         self.turn_pending = True
                         self.broadcast({'type': 'turn_pending', 'color': self.game.turn})
                         continue
@@ -210,7 +200,6 @@ class FanoronaServer:
                         captured = ctx['approach']
                     else:
                         captured = ctx['withdrawal']
-                    # apply move and remove captured
                     self.game.move_piece(x1, y1, x2, y2)
                     for (cx, cy) in captured:
                         self.game.remove_piece(cx, cy)
@@ -219,7 +208,6 @@ class FanoronaServer:
                     visited_seq.update(ctx['visited_seq'])
                     self.game.record_move(captured)
                     self.game.update_winner()
-                    # after applying, check continuation
                     cont = False
                     for (nx, ny) in self.game.neighbors.get((x2, y2), []):
                         if self.game.board.get(nx, ny) != '.':
@@ -241,20 +229,17 @@ class FanoronaServer:
                         self.broadcast({'type': 'turn', 'color': self.game.turn, 'status': 'capture'})
                         continue
                     else:
-                        # clear visited seq; player must press End Turn to hand control to opponent
                         visited_seq.clear()
                         self.turn_pending = True
                         self.broadcast({'type': 'turn_pending', 'color': self.game.turn})
                         continue
                 if t == 'end_turn':
-                    # only the current player can end their turn
                     if player.color != self.game.turn:
                         player.send({'type': 'invalid', 'reason': 'not_your_turn'})
                         continue
                     if not self.turn_pending:
                         player.send({'type': 'invalid', 'reason': 'no_turn_pending'})
                         continue
-                    # clear any visited seq and switch turn
                     visited_seq.clear()
                     self.turn_pending = False
                     self.game.switch_turn()
@@ -263,13 +248,11 @@ class FanoronaServer:
                         break
                     self.broadcast({'type': 'turn', 'color': self.game.turn, 'status': 'active'})
                     continue
-                # unknown
                 player.send({'type': 'invalid', 'reason': 'unknown_command'})
             except Exception as e:
                 traceback.print_exc()
                 player.send({'type': 'error', 'reason': 'server_error'})
 
-        # close connections
         for p in self.clients:
             try:
                 p.conn.close()

@@ -6,7 +6,6 @@ class Board:
     HEIGHT = 5
 
     def __init__(self):
-        # 'P' = Pink, 'R' = Red, '.' = empty
         self.grid = [[None for _ in range(self.WIDTH)] for _ in range(self.HEIGHT)]
         self.setup()
 
@@ -14,15 +13,12 @@ class Board:
         for y in range(self.HEIGHT):
             for x in range(self.WIDTH):
                 self.grid[y][x] = '.'
-        # top two rows P (pink)
         for y in (0, 1):
             for x in range(self.WIDTH):
                 self.grid[y][x] = 'P'
-        # bottom two rows R (red)
         for y in (3, 4):
             for x in range(self.WIDTH):
                 self.grid[y][x] = 'R'
-        # middle row: alternate R and P across the row, center empty
         mid = self.WIDTH // 2
         for x in range(self.WIDTH):
             if x == mid:
@@ -68,7 +64,7 @@ DIRS = [
 class Game:
     def __init__(self):
         self.board = Board()
-        self.turn = 'R'  # Red starts (was White in previous convention)
+        self.turn = 'R'
         self.winner = None
         self.no_capture_turns = 0
         self.turn_had_capture = False
@@ -94,14 +90,12 @@ class Game:
             self.turn_had_capture = True
 
     def is_adjacent(self, x1, y1, x2, y2):
-        # adjacency according to neighbor graph
         return (x2, y2) in self.neighbors.get((x1, y1), [])
 
     def _ensure_piece_path(self, x, y):
         return set()
 
     def can_piece_visit(self, x1, y1, x2, y2):
-        # The server tracks visited positions for the current capture sequence.
         return True
 
     def move_piece(self, x1, y1, x2, y2):
@@ -123,7 +117,6 @@ class Game:
         for y in range(Board.HEIGHT):
             for x in range(Board.WIDTH):
                 nbrs = []
-                # orthogonals
                 for dx, dy in [(1,0),(-1,0),(0,1),(0,-1)]:
                     nx, ny = x+dx, y+dy
                     if 0 <= nx < Board.WIDTH and 0 <= ny < Board.HEIGHT:
@@ -162,18 +155,12 @@ class Game:
         dx = x2 - x1
         dy = y2 - y1
         ndx, ndy = self.normalize(dx, dy)
-        # approach: from destination forward
         approach = self.contiguous_in_direction(x2, y2, ndx, ndy, piece)
-        # withdrawal: from source backward
         wdx, wdy = -ndx, -ndy
         withdrawal = self.contiguous_in_direction(x1, y1, wdx, wdy, piece)
         return (approach, withdrawal)
 
     def contiguous_in_direction(self, x, y, dx, dy, player):
-        # returns list of opponent positions contiguous from (x,y) following
-        # the neighbor graph in direction (dx,dy). We step by validating
-        # that each successive cell is a neighbor of the previous one and
-        # that the step direction matches (dx,dy) normalized.
         res = []
         ndx, ndy = self.normalize(dx, dy)
         cx, cy = x, y
@@ -181,7 +168,6 @@ class Game:
             nx, ny = cx + ndx, cy + ndy
             if not self.board.in_bounds(nx, ny):
                 break
-            # ensure (nx,ny) is reachable from (cx,cy)
             if (nx, ny) not in self.neighbors.get((cx, cy), []):
                 break
             val = self.board.get(nx, ny)
@@ -194,7 +180,6 @@ class Game:
         return res
 
     def apply_move(self, x1, y1, x2, y2, visited_seq=None):
-        # returns (ok, message, captured_positions, continue_capture_possible, requires_choice)
         if visited_seq is None:
             visited_seq = set()
         if not self.board.in_bounds(x1, y1) or not self.board.in_bounds(x2, y2):
@@ -216,33 +201,23 @@ class Game:
         if not visited_seq:
             visited_seq.add((x1, y1))
 
-        # compute captures but don't apply both automatically
         approach, withdrawal = self.captures_for_move(x1, y1, x2, y2)
 
-        # If no captures produced, this is a simple move
         if not approach and not withdrawal:
-            # simple move: apply and switch turn
             self.move_piece(x1, y1, x2, y2)
             self.update_winner()
-            # turn passing handled by server (manual end-turn)
             return (True, 'Ok', [], False, False)
 
-        # if both present, require choice by player (approach vs withdrawal)
         if approach and withdrawal:
-            # do not change board yet; caller must resolve choice
             return (True, 'ChoiceRequired', [], False, True)
 
-        # exactly one capture type present: apply it
         captured = approach if approach else withdrawal
-        # apply move
         self.move_piece(x1, y1, x2, y2)
         for (cx, cy) in captured:
             self.remove_piece(cx, cy)
         visited_seq.add((x2, y2))
 
-        # After move, check if further captures possible for the same piece at (x2,y2)
         cont = False
-        # only consider further captures along neighbor edges
         for (nx, ny) in self.neighbors.get((x2, y2), []):
             if self.board.get(nx, ny) != '.':
                 continue
@@ -254,9 +229,6 @@ class Game:
                 break
 
         self.update_winner()
-
-        # If no further capture, do NOT switch turn automatically; server will require manual end-turn
-        # (game.turn remains the current player until server calls switch_turn())
 
         return (True, 'Ok', captured, cont, False)
 
@@ -296,13 +268,11 @@ class Game:
         return self.no_capture_turns >= 50
 
     def player_has_any_capture(self, player):
-        # iterate all pieces of player and check if any move yields captures
         for y in range(self.board.HEIGHT):
             for x in range(self.board.WIDTH):
                 if self.board.get(x, y) != player:
                     continue
                 for (nx, ny) in self.neighbors.get((x, y), []):
-                    # destination must be empty to be a legal move
                     if self.board.get(nx, ny) != '.':
                         continue
                     ap, wd = self.captures_for_move(x, y, nx, ny)
