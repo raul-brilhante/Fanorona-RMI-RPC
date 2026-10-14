@@ -1,9 +1,7 @@
-import socket
-import threading
-import json
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 from game import Game
+from rpc_client import FanoronaRPCClient
 
 CELL_SIZE = 64
 COLS = 9
@@ -23,8 +21,7 @@ class GUIClient(tk.Tk):
         self.title('Cliente Fanorona')
         self.geometry(f'{CELL_SIZE * COLS + 300}x{CELL_SIZE * ROWS + 80}')
 
-        self.sock = None
-        self.reader_thread = None
+        self.rpc = None
         self.my_color = None
         self.turn = None
         self.board = [['.' for _ in range(COLS)] for _ in range(ROWS)]
@@ -88,9 +85,9 @@ class GUIClient(tk.Tk):
         self.redraw_board()
 
     def end_turn(self):
-        if not self.sock:
+        if not self.rpc:
             return
-        self.send_json({'type': 'end_turn'})
+        self.rpc.end_turn()
         self.end_turn_enabled = False
         self.update_end_button_state()
 
@@ -98,7 +95,7 @@ class GUIClient(tk.Tk):
         self.end_turn_button.config(state='normal' if self.end_turn_enabled else 'disabled')
 
     def connect(self):
-        if self.sock:
+        if self.rpc:
             messagebox.showinfo('Informação', 'Já conectado')
             return
         host = self.host_var.get()
@@ -109,110 +106,75 @@ class GUIClient(tk.Tk):
             return
         name = self.name_var.get() or 'Jogador'
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((host, port))
-            self.sock = sock
-            self.send_json({'type': 'join', 'name': name})
-            self.reader_thread = threading.Thread(target=self.reader_loop, daemon=True)
-            self.reader_thread.start()
+            uri = f'PYRO:fanorona@{host}:{port}'
+            self.rpc = FanoronaRPCClient(uri, self._on_rpc_update)
+            registration = self.rpc.register(name)
+            self.my_color = registration['color']
+            self.lbl_color.config(text=f'Cor: {self.my_color}')
+            self.process_state(registration['state'])
             self.log('Conectado ao servidor')
         except Exception as e:
+            if self.rpc:
+                self.rpc.close()
+                self.rpc = None
             messagebox.showerror('Erro', f'Não foi possível conectar: {e}')
 
     def resign(self):
-        if self.sock:
-            self.send_json({'type': 'resign'})
+        if self.rpc:
+            self.rpc.resign()
 
     def send_chat(self):
         txt = self.chat_var.get().strip()
-        if not txt or not self.sock:
+        if not txt or not self.rpc:
             return
         self.chat_var.set('')
-        self.send_json({'type': 'chat', 'text': txt})
+        self.rpc.chat(txt)
         self.chat_input.focus_set()
 
-    def send_json(self, obj):
-        try:
-            self.sock.sendall((json.dumps(obj) + '\n').encode('utf-8'))
-        except Exception as e:
-            self.log(f'Erro ao enviar: {e}')
+    def _on_rpc_update(self, payload):
+        self.after(0, self.process_rpc_update, payload)
 
-    def reader_loop(self): #
-        f = self.sock.makefile('r', encoding='utf-8', newline='\n')
-        try:
-            for raw in f:
-                line = raw.rstrip('\n')
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                self.after(0, self.process_server_msg, obj)
-        except Exception as e:
-            self.after(0, self.log, f'Leitura interrompida: {e}')
-
-    def process_server_msg(self, msg): #
-        message_type = msg.get('type')
-        if message_type == 'board':
-            rows = msg.get('rows', [])
-            if len(rows) >= ROWS:
-                for y in range(ROWS):
-                    for x in range(COLS):
-                        self.board[y][x] = rows[y][x] if x < len(rows[y]) else '.'
-                self.redraw_board()
-            return
-        if message_type == 'assign':
-            self.my_color = msg.get('color')
-            self.lbl_color.config(text=f'Cor: {self.my_color}')
-            self.log(f'Cor atribuída: {self.my_color}')
-            return
-        if message_type == 'turn':
-            self.turn = msg.get('color')
-            self.lbl_turn.config(text=f'Turno: {self.turn}')
-            self.end_turn_enabled = self.my_color == self.turn and msg.get('status') in (None, 'active')
-            self.update_end_button_state()
-            return
-        if message_type == 'turn_pending':
-            self.turn = msg.get('color')
-            self.lbl_turn.config(text=f'Turno (aguardando encerramento): {self.turn}')
-            self.end_turn_enabled = self.my_color == self.turn
-            self.update_end_button_state()
-            return
+    def process_rpc_update(self, payload):
+        self.process_state(payload.get('state', {}))
+        event = payload.get('event') or {}
+        message_type = event.get('type')
         if message_type == 'chat':
-            self.log(f"{msg.get('from')}: {msg.get('text')}")
-            return
-        if message_type == 'move_ok':
-            from_position = [value + 1 for value in msg.get('from', [])]
-            to_position = [value + 1 for value in msg.get('to', [])]
-            self.log(f"Movimento: {msg.get('color')} {from_position} -> {to_position}")
-            return
-        if message_type == 'choose':
-            choice_id = msg.get('choice_id')
-            approach_count = msg.get('approach_count')
-            withdrawal_count = msg.get('withdrawal_count')
+            self.log(f"{event.get('from')}: {event.get('text')}")
+        elif message_type == 'move_ok':
+            from_position = [value + 1 for value in event.get('from', [])]
+            to_position = [value + 1 for value in event.get('to', [])]
+            self.log(f"Movimento: {event.get('color')} {from_position} -> {to_position}")
+        elif message_type == 'choose':
             question = (
-                f'As capturas por aproximação ({approach_count}) e afastamento '
-                f'({withdrawal_count}) estão disponíveis. Escolher aproximação? '
-                '(Não escolhe afastamento)'
+                f"As capturas por aproximação ({event.get('approach_count')}) e "
+                f"afastamento ({event.get('withdrawal_count')}) estão disponíveis. "
+                "Escolher aproximação? (Não escolhe afastamento)"
             )
-            choice = 'approach' if messagebox.askyesno('Escolha da captura', question) else 'withdrawal'
-            self.send_json({'type': 'capture_choice', 'choice_id': choice_id, 'choice': choice})
-            return
-        if message_type == 'game_over':
-            self.log(f"Fim de jogo: vencedor {msg.get('winner')}")
-            messagebox.showinfo('Fim de jogo', f"Vencedor: {msg.get('winner')}")
-            return
-        if message_type == 'invalid':
-            self.log('Inválido: ' + str(msg.get('reason')))
-            return
-        if message_type == 'continue':
+            choice = 'approach' if messagebox.askyesno(
+                'Escolha da captura', question
+            ) else 'withdrawal'
+            self.rpc.choose_capture(event.get('choice_id'), choice)
+        elif message_type == 'game_over':
+            self.log(f"Fim de jogo: vencedor {event.get('winner')}")
+            messagebox.showinfo('Fim de jogo', f"Vencedor: {event.get('winner')}")
+        elif message_type == 'continue':
             self.log('Você pode capturar novamente')
-            return
-        if message_type == 'error':
-            self.log('Erro: ' + str(msg.get('reason')))
-            return
-        self.log(str(msg))
+        elif message_type == 'turn_pending':
+            self.log('Encerramento do turno pendente')
+
+    def process_state(self, state):
+        rows = state.get('rows', [])
+        if len(rows) >= ROWS:
+            for y in range(ROWS):
+                for x in range(COLS):
+                    self.board[y][x] = rows[y][x] if x < len(rows[y]) else '.'
+            self.redraw_board()
+        self.turn = state.get('turn')
+        status = state.get('status')
+        suffix = ' (aguardando encerramento)' if status == 'turn_pending' else ''
+        self.lbl_turn.config(text=f'Turno: {self.turn}{suffix}')
+        self.end_turn_enabled = self.my_color == self.turn and status == 'turn_pending'
+        self.update_end_button_state()
 
     def redraw_board(self):
         self.canvas.delete('all')
@@ -291,7 +253,7 @@ class GUIClient(tk.Tk):
     def on_canvas_click(self, event):
         x = int(event.x // CELL_SIZE)
         y = int(event.y // CELL_SIZE)
-        if x < 0 or x >= COLS or y < 0 or y >= ROWS or not self.sock or not self.my_color:
+        if x < 0 or x >= COLS or y < 0 or y >= ROWS or not self.rpc or not self.my_color:
             return
         current = self.board[y][x]
         if self.selection is None:
@@ -306,7 +268,9 @@ class GUIClient(tk.Tk):
             self.selection = None
             self.redraw_board()
             return
-        self.send_json({'type': 'move', 'from': [source_x, source_y], 'to': [x, y]})
+        result = self.rpc.move(source_x, source_y, x, y)
+        if not result.get('ok'):
+            self.log('Inválido: ' + str(result.get('reason')))
         self.selection = None
         self.redraw_board()
 
@@ -318,8 +282,8 @@ class GUIClient(tk.Tk):
 
     def on_close(self):
         try:
-            if self.sock:
-                self.sock.close()
+            if self.rpc:
+                self.rpc.close()
         except Exception:
             pass
         self.destroy()

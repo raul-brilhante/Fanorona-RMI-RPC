@@ -1,64 +1,32 @@
-import threading
-import time
-import socket
-
-from server import FanoronaServer
-
-HOST = '127.0.0.1'
-PORT = 6000
-import json
+from game import Game
+from rpc_server import FanoronaRPC
 
 
-def run_server():
-    s = FanoronaServer(host=HOST, port=PORT)
-    s.start()
+def test_rules_are_unchanged():
+    game = Game()
+    ok, _, captured, continuation, choice = game.apply_move(4, 3, 4, 2, set())
+    assert ok
+    assert captured == [(4, 1), (4, 0)]
+    assert not continuation
+    assert not choice
 
 
-def read_lines(sock, tag, timeout=2.0):
-    sock.settimeout(0.5)
-    end = time.time() + timeout
-    buf = ''
-    try:
-        f = sock.makefile('r', encoding='utf-8')
-        while time.time() < end:
-            line = f.readline()
-            if not line:
-                break
-            print(f'[{tag}] {line.rstrip()}')
-    except Exception as e:
-        pass
+def test_rpc_updates_shared_state_without_text_protocol():
+    service = FanoronaRPC()
+    first = service.register_player('Raul')
+    second = service.register_player('Cidcley')
 
+    assert first['ok'] and second['ok']
+    result = service.move(first['token'], 4, 3, 4, 2)
+    assert result['ok']
 
-def simulate_clients():
-    s1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s1.connect((HOST, PORT))
-    s1.sendall((json.dumps({'type':'join','name':'Raul'}) + '\n').encode('utf-8'))
-    time.sleep(0.2)
-    s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s2.connect((HOST, PORT))
-    s2.sendall((json.dumps({'type':'join','name':'Cidcley'}) + '\n').encode('utf-8'))
-    time.sleep(0.5)
-
-    s1.sendall((json.dumps({'type':'get_board'}) + '\n').encode('utf-8'))
-    time.sleep(0.2)
-    print('\n-- after GET_BOARD:')
-    read_lines(s1, 'C1')
-    read_lines(s2, 'C2')
-
-    s1.sendall((json.dumps({'type':'move','from':[4,3],'to':[4,2]}) + '\n').encode('utf-8'))
-    time.sleep(0.5)
-    print('\n-- after MOVE by Raul:')
-    read_lines(s1, 'C1')
-    read_lines(s2, 'C2')
-
-    s1.close()
-    s2.close()
+    first_state = service.get_state(first['token'])['state']
+    second_state = service.get_state(second['token'])['state']
+    assert first_state['rows'] == second_state['rows']
+    assert first_state['rows'][2][4] == 'R'
 
 
 if __name__ == '__main__':
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
-    time.sleep(0.4)
-    simulate_clients()
-    time.sleep(1.0)
-    print('\nTest finished')
+    test_rules_are_unchanged()
+    test_rpc_updates_shared_state_without_text_protocol()
+    print('RPC smoke tests passed')

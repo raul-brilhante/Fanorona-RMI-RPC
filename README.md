@@ -1,82 +1,57 @@
-Fanorona over Sockets (prototype)
+# Fanorona over Pyro5 RMI/RPC
 
-Protótipo em Python para jogar Fanorona via sockets (servidor + 2 clientes gráficos).
-Durante uma partida, o servidor aceita exatamente dois jogadores. Conexões
-adicionais recebem um erro JSON (`game_full`) e são encerradas.
+Jogo de Fanorona em Python com um servico autoritativo Pyro5 e dois clientes
+graficos. A logica do jogo permanece em `game.py`; somente a camada de
+comunicacao foi substituida por chamadas remotas de metodos.
 
-Requisitos
+## Requisitos
 
 - Python 3.8+
+- Pyro5 (`python -m pip install -r requirements.txt`)
 
-Como executar
+## Como executar
 
-1) Abra um terminal e rode o servidor:
+Na maquina que hospedara a partida:
 
 ```bash
-python server.py
+python server.py --host 0.0.0.0 --port 5000
 ```
 
-2) Use a interface gráfica (`gui_client.py`) em duas máquinas (ou na mesma máquina em janelas diferentes):
+Em cada uma das duas maquinas:
 
 ```bash
 python gui_client.py
 ```
 
-As peças usam as letras `R` (vermelha) e `P` (rosa) no protocolo e no tabuleiro.
+Na GUI, informe o IP da maquina do servidor e a porta `5000`. O servidor aceita
+exatamente dois jogadores. O cliente registra um callback Pyro5 proprio;
+depois de cada movimento, o servidor invoca esse callback em ambos os clientes,
+enviando o novo estado do tabuleiro e o evento correspondente.
 
-Protocolo de rede
+Pyro5 foi escolhido por oferecer RMI orientado a objetos (metodos e callbacks
+remotos) sem criar um protocolo textual artesanal. O servidor mantem o unico
+estado de `Game`, enquanto `rpc_client.py` e `rpc_server.py` isolam o
+transporte.
 
-O servidor e clientes usam NDJSON (uma mensagem JSON por linha) com mensagens como:
+## Regras preservadas
 
-- Cliente -> Servidor:
-	- `{"type":"join","name":"Raul"}`
-	- `{"type":"chat","text":"boa sorte"}`
-	- `{"type":"move","from":[x1,y1],"to":[x2,y2]}`
-	- `{"type":"resign"}`
-	- `{"type":"get_board"}`
+- O tabuleiro usa as conexoes horizontais, verticais e diagonais do Fanorona.
+- Capturas por aproximacao e afastamento, sequencias, bloqueio, vitoria e
+  empate continuam implementados em `game.py`.
+- O servidor apenas coordena chamadas e sincroniza o estado existente.
 
-- Servidor -> Cliente:
-	- `{"type":"error","reason":"game_full"}`
-	- `{"type":"assign","color":"R"}`
-	- `{"type":"board","rows":["PPPPPPPPP",... ]}`
-	- `{"type":"turn","color":"R"}`
-	- `{"type":"move_ok","color":"R","from":[x1,y1],"to":[x2,y2],"captured":[[cx,cy],...]}`
-	- `{"type":"chat","from":"Cidcley","text":"oi"}`
-	- `{"type":"game_over","winner":"P"}`
+## Build / Executaveis
 
-	Todas as mensagens do protocolo são objetos JSON delimitados por uma quebra de
-	linha. Não há mensagem inicial em texto puro; o primeiro evento útil recebido
-	pelo cliente é uma mensagem JSON do servidor.
-
-Observações
-
-- O tabuleiro usa as conexões horizontais, verticais e diagonais do Fanorona; capturas são aplicadas quando o movimento escolhido as produz.
-- Durante uma sequência de capturas, o servidor mantém o histórico das posições
-	visitadas pela peça e impede que ela passe duas vezes pelo mesmo ponto. Esse
-	histórico é limpo ao finalizar o turno e não bloqueia movimentos de turnos
-	posteriores.
-- A partida também detecta vitória por bloqueio e empate após 50 turnos consecutivos sem captura.
-
-Build / Executáveis
-
-Você pode criar executáveis Windows usando `PyInstaller`. Um helper `build_exe.bat` foi incluído no repositório.
-
-Exemplo (PowerShell):
+Voce pode criar executaveis Windows usando `PyInstaller`:
 
 ```powershell
-python -m pip install --upgrade pip
 python -m pip install --upgrade pyinstaller
 .\build_exe.bat
 ```
 
-Os binários gerados (`fanorona_server.exe`, `fanorona_gui.exe`) ficarão na pasta `dist`.
+Os binarios gerados (`fanorona_server.exe`, `fanorona_gui.exe`) ficarao em
+`dist`.
 
-Se preferir rodar manualmente o PyInstaller:
-
-```powershell
-pyinstaller --onefile --name fanorona_server server.py
-pyinstaller --noconsole --onefile --name fanorona_gui gui_client.py
-```
-
-Observações:
-- O projeto usa apenas módulos da stdlib (`socket`, `threading`, `json`, `tkinter`), então não há dependências de runtime além do Python e do `pyinstaller` para build.
+O projeto usa `tkinter` e Pyro5 em runtime. O Pyro5 usa sua propria camada de
+transporte internamente; a aplicacao nao importa nem manipula `socket`,
+`select`, buffers ou mensagens JSON.
