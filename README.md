@@ -1,8 +1,7 @@
-# Fanorona over Pyro5 RMI/RPC
+# Fanorona Pyro5 RMI/RPC
 
 Jogo de Fanorona em Python com um servico autoritativo Pyro5 e dois clientes
-graficos. A logica do jogo permanece em `game.py`; somente a camada de
-comunicacao foi substituida por chamadas remotas de metodos.
+graficos. A logica do jogo está em `game.py`..
 
 ## Requisitos
 
@@ -33,11 +32,11 @@ remotos) sem criar um protocolo textual artesanal. O servidor mantem o unico
 estado de `Game`, enquanto `rpc_client.py` e `rpc_server.py` isolam o
 transporte.
 
-## Regras preservadas
+## Regras
 
 - O tabuleiro usa as conexoes horizontais, verticais e diagonais do Fanorona.
 - Capturas por aproximacao e afastamento, sequencias, bloqueio, vitoria e
-  empate continuam implementados em `game.py`.
+  empate implementados em `game.py`.
 - O servidor apenas coordena chamadas e sincroniza o estado existente.
 
 ## Build / Executaveis
