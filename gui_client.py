@@ -1,3 +1,5 @@
+import queue
+import threading
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 from game import Game
@@ -22,6 +24,7 @@ class GUIClient(tk.Tk):
         self.geometry(f'{CELL_SIZE * COLS + 300}x{CELL_SIZE * ROWS + 80}')
 
         self.rpc = None
+        self.ui_queue = queue.Queue()
         self.my_color = None
         self.turn = None
         self.board = [['.' for _ in range(COLS)] for _ in range(ROWS)]
@@ -46,7 +49,8 @@ class GUIClient(tk.Tk):
         tk.Label(top, text='Nome:').pack(side='left')
         self.name_var = tk.StringVar(value='Jogador')
         tk.Entry(top, textvariable=self.name_var, width=12).pack(side='left')
-        tk.Button(top, text='Conectar', command=self.connect).pack(side='left', padx=4)
+        self.connect_button = tk.Button(top, text='Conectar', command=self.connect)
+        self.connect_button.pack(side='left', padx=4)
         tk.Button(top, text='Desistir', command=self.resign).pack(side='left', padx=4)
         self.end_turn_button = tk.Button(top, text='Encerrar turno', command=self.end_turn)
         self.end_turn_button.pack(side='left', padx=4)
@@ -83,13 +87,12 @@ class GUIClient(tk.Tk):
         self.end_turn_enabled = False
         self.end_turn_button.config(state='disabled')
         self.redraw_board()
+        self.after(50, self.process_ui_queue)
 
     def end_turn(self):
         if not self.rpc:
             return
-        self.rpc.end_turn()
-        self.end_turn_enabled = False
-        self.update_end_button_state()
+        self._run_rpc_call(self.rpc.end_turn)
 
     def update_end_button_state(self):
         self.end_turn_button.config(state='normal' if self.end_turn_enabled else 'disabled')
@@ -105,34 +108,80 @@ class GUIClient(tk.Tk):
             messagebox.showerror('Erro', 'Porta inválida')
             return
         name = self.name_var.get() or 'Jogador'
+        self.connect_button.config(state='disabled', text='Conectando...')
+        threading.Thread(
+            target=self._connect_worker,
+            args=(host, port, name),
+            daemon=True,
+        ).start()
+
+    def _connect_worker(self, host, port, name):
+        client = None
         try:
             uri = f'PYRO:fanorona@{host}:{port}'
-            self.rpc = FanoronaRPCClient(uri, self._on_rpc_update)
-            registration = self.rpc.register(name)
-            self.my_color = registration['color']
-            self.lbl_color.config(text=f'Cor: {self.my_color}')
-            self.process_state(registration['state'])
-            self.log('Conectado ao servidor')
-        except Exception as e:
-            if self.rpc:
-                self.rpc.close()
-                self.rpc = None
-            messagebox.showerror('Erro', f'Não foi possível conectar: {e}')
+            client = FanoronaRPCClient(uri, self._on_rpc_update)
+            registration = client.register(name)
+            self.ui_queue.put(('connected', client, registration))
+        except Exception as error:
+            if client:
+                client.close()
+            self.ui_queue.put(('connection_error', error))
 
     def resign(self):
         if self.rpc:
-            self.rpc.resign()
+            self._run_rpc_call(self.rpc.resign)
 
     def send_chat(self):
         txt = self.chat_var.get().strip()
         if not txt or not self.rpc:
             return
         self.chat_var.set('')
-        self.rpc.chat(txt)
+        self._run_rpc_call(self.rpc.chat, txt)
         self.chat_input.focus_set()
 
     def _on_rpc_update(self, payload):
-        self.after(0, self.process_rpc_update, payload)
+        self.ui_queue.put(('rpc_update', payload))
+
+    def process_ui_queue(self):
+        try:
+            while True:
+                event = self.ui_queue.get_nowait()
+                event_type = event[0]
+                if event_type == 'connected':
+                    _, client, registration = event
+                    self.rpc = client
+                    self.my_color = registration['color']
+                    self.lbl_color.config(text=f'Cor: {self.my_color}')
+                    self.process_state(registration['state'])
+                    self.connect_button.config(state='normal', text='Conectar')
+                    self.log('Conectado ao servidor')
+                elif event_type == 'connection_error':
+                    self.connect_button.config(state='normal', text='Conectar')
+                    messagebox.showerror(
+                        'Erro', f'Não foi possível conectar: {event[1]}'
+                    )
+                elif event_type == 'rpc_update':
+                    self.process_rpc_update(event[1])
+                elif event_type == 'rpc_result':
+                    result = event[1]
+                    if not result.get('ok'):
+                        self.log('Inválido: ' + str(result.get('reason')))
+                elif event_type == 'rpc_error':
+                    self.log(f'Erro de comunicação RPC: {event[1]}')
+        except queue.Empty:
+            pass
+        self.after(50, self.process_ui_queue)
+
+    def _run_rpc_call(self, method, *args):
+        def worker():
+            try:
+                result = method(*args)
+                if isinstance(result, dict):
+                    self.ui_queue.put(('rpc_result', result))
+            except Exception as error:
+                self.ui_queue.put(('rpc_error', error))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def process_rpc_update(self, payload):
         self.process_state(payload.get('state', {}))
@@ -145,6 +194,9 @@ class GUIClient(tk.Tk):
             to_position = [value + 1 for value in event.get('to', [])]
             self.log(f"Movimento: {event.get('color')} {from_position} -> {to_position}")
         elif message_type == 'choose':
+            if event.get('chooser_color') != self.my_color:
+                self.log('Aguardando o adversário escolher o tipo de captura...')
+                return
             question = (
                 f"As capturas por aproximação ({event.get('approach_count')}) e "
                 f"afastamento ({event.get('withdrawal_count')}) estão disponíveis. "
@@ -153,7 +205,9 @@ class GUIClient(tk.Tk):
             choice = 'approach' if messagebox.askyesno(
                 'Escolha da captura', question
             ) else 'withdrawal'
-            self.rpc.choose_capture(event.get('choice_id'), choice)
+            self._run_rpc_call(
+                self.rpc.choose_capture, event.get('choice_id'), choice
+            )
         elif message_type == 'game_over':
             self.log(f"Fim de jogo: vencedor {event.get('winner')}")
             messagebox.showinfo('Fim de jogo', f"Vencedor: {event.get('winner')}")
@@ -171,7 +225,11 @@ class GUIClient(tk.Tk):
             self.redraw_board()
         self.turn = state.get('turn')
         status = state.get('status')
-        suffix = ' (aguardando encerramento)' if status == 'turn_pending' else ''
+        suffixes = {
+            'turn_pending': ' (aguardando encerramento)',
+            'pending_capture_choice': ' (escolha de captura pendente)',
+        }
+        suffix = suffixes.get(status, '')
         self.lbl_turn.config(text=f'Turno: {self.turn}{suffix}')
         self.end_turn_enabled = self.my_color == self.turn and status == 'turn_pending'
         self.update_end_button_state()
@@ -268,9 +326,7 @@ class GUIClient(tk.Tk):
             self.selection = None
             self.redraw_board()
             return
-        result = self.rpc.move(source_x, source_y, x, y)
-        if not result.get('ok'):
-            self.log('Inválido: ' + str(result.get('reason')))
+        self._run_rpc_call(self.rpc.move, source_x, source_y, x, y)
         self.selection = None
         self.redraw_board()
 
@@ -281,11 +337,10 @@ class GUIClient(tk.Tk):
         self.chat.config(state='disabled')
 
     def on_close(self):
-        try:
-            if self.rpc:
-                self.rpc.close()
-        except Exception:
-            pass
+        client = self.rpc
+        self.rpc = None
+        if client:
+            threading.Thread(target=client.close, daemon=True).start()
         self.destroy()
 
 

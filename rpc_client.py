@@ -3,6 +3,7 @@ import threading
 
 import Pyro5.api
 import Pyro5.core
+import Pyro5.errors
 
 
 def _client_ip_for_server(uri):
@@ -52,9 +53,12 @@ class FanoronaRPCClient:
         )
         self.callback_thread.start()
         self.token = None
+        self.proxy_lock = threading.Lock()
 
     def register(self, name):
-        result = self.proxy.register_player(name, str(self.callback_uri))
+        with self.proxy_lock:
+            self.proxy._pyroClaimOwnership()
+            result = self.proxy.register_player(name, str(self.callback_uri))
         if not result['ok']:
             raise RuntimeError(result['reason'])
         self.token = result['token']
@@ -63,7 +67,9 @@ class FanoronaRPCClient:
     def _call(self, method, *args):
         if not self.token:
             raise RuntimeError('Cliente não registrado no servidor')
-        return getattr(self.proxy, method)(self.token, *args)
+        with self.proxy_lock:
+            self.proxy._pyroClaimOwnership()
+            return getattr(self.proxy, method)(self.token, *args)
 
     def move(self, x1, y1, x2, y2):
         return self._call('move', x1, y1, x2, y2)
@@ -81,5 +87,13 @@ class FanoronaRPCClient:
         return self._call('resign')
 
     def close(self):
+        if self.token:
+            try:
+                self._call('disconnect')
+            except (Pyro5.errors.PyroError, OSError):
+                pass
+            self.token = None
         self.callback_daemon.shutdown()
-        self.proxy._pyroRelease()
+        with self.proxy_lock:
+            self.proxy._pyroClaimOwnership()
+            self.proxy._pyroRelease()

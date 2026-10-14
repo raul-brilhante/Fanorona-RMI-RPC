@@ -22,11 +22,14 @@ class FanoronaRPC:
         self.lock = threading.RLock()
 
     def _state(self):
+        status = 'pending_capture_choice' if self.pending_choices else (
+            'turn_pending' if self.turn_pending else 'active'
+        )
         return {
             'rows': self.game.board.serialize().splitlines(),
             'turn': self.game.turn,
             'winner': self.game.winner,
-            'status': 'turn_pending' if self.turn_pending else 'active',
+            'status': status,
         }
 
     def _result(self, ok=True, **values):
@@ -45,7 +48,7 @@ class FanoronaRPC:
             try:
                 callback._pyroClaimOwnership()
                 callback.state_updated(payload)
-            except (Pyro5.errors.CommunicationError, Pyro5.errors.ConnectionClosedError):
+            except (Pyro5.errors.PyroError, OSError):
                 disconnected.append(token)
         for token in disconnected:
             self.players.pop(token, None)
@@ -73,6 +76,17 @@ class FanoronaRPC:
             if not self._player(token):
                 return self._result(False, reason='invalid_player')
             return self._result(True, state=self._state())
+
+    @Pyro5.api.expose
+    def disconnect(self, token):
+        with self.lock:
+            if token not in self.players:
+                return self._result(False, reason='invalid_player')
+            self.players.pop(token)
+            for choice_id, context in list(self.pending_choices.items()):
+                if context['token'] == token:
+                    self.pending_choices.pop(choice_id)
+            return self._result(True)
 
     @Pyro5.api.expose
     def move(self, token, x1, y1, x2, y2):
@@ -105,6 +119,7 @@ class FanoronaRPC:
                     'visited_seq': set(self.visited_seq),
                 }
                 self._notify({'type': 'choose', 'choice_id': choice_id,
+                              'chooser_color': player['color'],
                               'approach_count': len(approach),
                               'withdrawal_count': len(withdrawal)})
                 return self._result(True, requires_choice=True)
@@ -130,13 +145,20 @@ class FanoronaRPC:
     @Pyro5.api.expose
     def choose_capture(self, token, choice_id, choice):
         with self.lock:
+            player = self._player(token)
+            if not player:
+                return self._result(False, reason='invalid_player')
             context = self.pending_choices.pop(str(choice_id), None)
             if not context:
                 return self._result(False, reason='bad_choice_id')
             if context['token'] != token:
                 self.pending_choices[str(choice_id)] = context
                 return self._result(False, reason='not_your_choice')
+            if player['color'] != self.game.turn:
+                self.pending_choices[str(choice_id)] = context
+                return self._result(False, reason='not_your_turn')
             if choice not in ('approach', 'withdrawal'):
+                self.pending_choices[str(choice_id)] = context
                 return self._result(False, reason='bad_capture_choice')
 
             x1, y1 = context['from']
@@ -158,7 +180,6 @@ class FanoronaRPC:
                      or self.game.captures_for_move(x2, y2, nx, ny)[1])
                 for nx, ny in self.game.neighbors.get((x2, y2), [])
             )
-            player = self.players[token]
             self._finish_move(player, x1, y1, x2, y2, captured, cont)
             return self._result(True, state=self._state())
 
