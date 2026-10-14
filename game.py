@@ -71,10 +71,6 @@ class Game:
         self.neighbors = self.build_neighbors(pattern='both_even')
 
     def set_neighbor_pattern(self, pattern: str):
-        """Rebuild the fixed traditional Fanorona graph.
-
-        The argument is retained for compatibility with older callers.
-        """
         self.neighbors = self.build_neighbors()
 
     def switch_turn(self):
@@ -107,12 +103,6 @@ class Game:
         self.board.set(x, y, '.')
 
     def build_neighbors(self, pattern='both_even'):
-        """Build the Fanorona connectivity for a 9x5 board.
-
-        The traditional board has horizontal and vertical lines everywhere.
-        Diagonals connect each even/even point to its diagonal odd/odd points.
-        The test is applied to both endpoints so the graph is undirected.
-        """
         neigh = {}
         for y in range(Board.HEIGHT):
             for x in range(Board.WIDTH):
@@ -142,9 +132,6 @@ class Game:
         return (dx, dy)
 
     def captures_for_move(self, x1, y1, x2, y2):
-        """Return (approach_list, withdrawal_list) of positions that would be captured if
-        the piece moves from (x1,y1) to (x2,y2). Lists are in order away from the moved piece.
-        Does not modify the board."""
         if not self.board.in_bounds(x1, y1) or not self.board.in_bounds(x2, y2):
             return ([], [])
         piece = self.board.get(x1, y1)
@@ -247,7 +234,6 @@ class Game:
             self.winner = self.turn
 
     def player_has_legal_move(self, player):
-        """Return whether the player has any legal adjacent move."""
         for y in range(self.board.HEIGHT):
             for x in range(self.board.WIDTH):
                 if self.board.get(x, y) != player:
