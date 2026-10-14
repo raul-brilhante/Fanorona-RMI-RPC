@@ -40,7 +40,7 @@ class FanoronaServer:
         self.turn_pending = False
 
     def start(self):
-        self.sock.bind((self.host, self.port))
+        self.sock.bind((self.host, self.port)) #
         self.sock.listen(5)
         print(f"Server listening on {self.host}:{self.port}")
         threading.Thread(target=self.accept_loop, daemon=True).start()
@@ -61,7 +61,7 @@ class FanoronaServer:
                 continue
             p = Player(conn, addr)
             self.clients.append(p)
-            threading.Thread(target=self.client_reader, args=(p,), daemon=True).start()
+            threading.Thread(target=self.client_reader, args=(p,), daemon=True).start() #
             print('Client connected', addr)
 
     def client_reader(self, player):
@@ -72,7 +72,7 @@ class FanoronaServer:
                 line = line.rstrip('\n')
                 if not line:
                     continue
-                self.q.put((player, line))
+                self.q.put((player, line)) #
         except Exception:
             traceback.print_exc()
         finally:
@@ -103,7 +103,7 @@ class FanoronaServer:
             player, line = self.q.get()
             try:
                 try:
-                    msg = json.loads(line)
+                    msg = json.loads(line) #
                 except Exception:
                     player.send({'type': 'error', 'reason': 'invalid_json'})
                     continue
@@ -142,7 +142,7 @@ class FanoronaServer:
                         player.send({'type': 'invalid', 'reason': 'capture_choice_pending'})
                         continue
 
-                    ok, msgtxt, captured, cont, requires_choice = self.game.apply_move(x1, y1, x2, y2, visited_seq)
+                    ok, msgtxt, captured, cont, requires_choice = self.game.apply_move(x1, y1, x2, y2, visited_seq) #
                     if not ok:
                         player.send({'type': 'invalid', 'reason': msgtxt})
                         continue

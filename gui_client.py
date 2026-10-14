@@ -137,7 +137,7 @@ class GUIClient(tk.Tk):
         except Exception as e:
             self.log(f'Erro ao enviar: {e}')
 
-    def reader_loop(self):
+    def reader_loop(self): #
         f = self.sock.makefile('r', encoding='utf-8', newline='\n')
         try:
             for raw in f:
@@ -152,7 +152,7 @@ class GUIClient(tk.Tk):
         except Exception as e:
             self.after(0, self.log, f'Leitura interrompida: {e}')
 
-    def process_server_msg(self, msg):
+    def process_server_msg(self, msg): #
         message_type = msg.get('type')
         if message_type == 'board':
             rows = msg.get('rows', [])
