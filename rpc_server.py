@@ -10,7 +10,6 @@ from game import Game
 
 @Pyro5.api.expose
 class FanoronaRPC:
-    """Serviço autoritativo do jogo, exposto como objeto remoto Pyro5."""
 
     def __init__(self):
         self.game = Game()

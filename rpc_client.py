@@ -7,7 +7,6 @@ import Pyro5.errors
 
 
 def _client_ip_for_server(uri):
-    """Return the local address reachable from the server described by ``uri``."""
     server_uri = Pyro5.core.URI(str(uri))
     server_host = server_uri.host
 
